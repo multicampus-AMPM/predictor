@@ -25,7 +25,7 @@ def main():
     """ context root """
     return """
         <html>
-            <head><title>Predictor</title></head>
+            <head><title>Predictor Exporter</title></head>
             <body>
                 <h1>Predictor Exporter</h1>
                 <p><a href='/metrics'>Metrics</a></p>
