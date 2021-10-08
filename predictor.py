@@ -61,7 +61,7 @@ def predict():
         if dataset is None:
             raise ValueError('no data from prometheus')
         # get model
-        model = mlflow.sklearn.load_model(os.path.join(os.environ['repo'], 'smart-model'))
+        model = mlflow.sklearn.load_model(os.environ['repo'])
     except (ValueError, ConnectionError):
         # TODO logging
         return 'no recent smart data found'
@@ -87,7 +87,7 @@ def parse_env():
     if port is None:
         os.environ['port'] = '9106'
     if repo is None:
-        os.environ['repo'] = '/ampm/models/'
+        os.environ['repo'] = '/tmp/smart'
     if prom is None:
         os.environ['prom'] = "prometheus:9090"
     os.environ['prom'] = f"http://{os.environ['prom']}/api/v1/query"
