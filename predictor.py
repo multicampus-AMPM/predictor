@@ -54,6 +54,7 @@ def main():
 @app.route('/predict/smart')
 @exporter.do_not_track()
 def predict():
+    # import pandas as pd
     # X = pd.read_json('{"Raw Read Error Rate":{"560631":0.451613},"SpinUpTime":{"560631":1.0},"Reallocated Sector Count":{"560631":1.0},"Seek Error Rate":{"560631":0.536585},"Power on Hours":{"560631":0.052632},"Reported Uncorrectable Error":{"560631":1.0},"High Fly Writes":{"560631":1.0},"Temperature Celsius":{"560631":-0.6},"Hardware ECC Recovered":{"560631":-0.225806},"Current Pending Sector":{"560631":1.0},"Reallocated Sectors Count":{"560631":-1.0},"Current Pending Sectors counts":{"560631":-1.0}}')
     try:
         # get data from prometheus
@@ -71,6 +72,7 @@ def predict():
         return 'no model found'
     # sklearn module required (not imported explicitly)
     predict_result.set(model.predict(dataset))
+    # predict_result.set(model.predict(X))
     return 'ok'
 
 
