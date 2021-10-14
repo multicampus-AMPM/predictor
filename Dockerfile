@@ -1,5 +1,5 @@
 FROM python:3.9-slim
-WORKDIR /home
-COPY . .
-RUN pip install --no-cache-dir --requirement requirements.txt
-CMD ["python", "./predictor.py"]
+COPY ./requirements.txt /home/
+RUN pip install --no-cache-dir --requirement /home/requirements.txt
+COPY ./predictor.py /home/
+CMD ["python", "/home/predictor.py"]

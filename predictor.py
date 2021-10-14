@@ -1,11 +1,11 @@
-#!/usr/bin/env python3
-
 from prometheus_client import Gauge
 from flask import Flask
 from prometheus_flask_exporter import PrometheusMetrics
 import mlflow.sklearn
+from mlflow.tracking import MlflowClient
 import os
 import requests
+import pandas as pd
 
 
 def from_prometheus(query):
@@ -54,26 +54,23 @@ def main():
 @app.route('/predict/smart')
 @exporter.do_not_track()
 def predict():
-    # import pandas as pd
-    # X = pd.read_json('{"Raw Read Error Rate":{"560631":0.451613},"SpinUpTime":{"560631":1.0},"Reallocated Sector Count":{"560631":1.0},"Seek Error Rate":{"560631":0.536585},"Power on Hours":{"560631":0.052632},"Reported Uncorrectable Error":{"560631":1.0},"High Fly Writes":{"560631":1.0},"Temperature Celsius":{"560631":-0.6},"Hardware ECC Recovered":{"560631":-0.225806},"Current Pending Sector":{"560631":1.0},"Reallocated Sectors Count":{"560631":-1.0},"Current Pending Sectors counts":{"560631":-1.0}}')
     try:
         # get data from prometheus
         dataset = from_prometheus('collectd_memory')
         if dataset is None:
             raise ValueError('no data from prometheus')
-        # get model
-        model = mlflow.sklearn.load_model(os.environ['repo'])
+        # get model      
+        model = mlflow.sklearn.load_model('models:/smart-model/Production')
     except (ValueError, ConnectionError):
-        # TODO logging
+        app.logger.error('no recent smart data found')
         return 'no recent smart data found'
     except OSError:
-        # no such file or directory
-        # TODO logging
+        app.logger.error('no such file or directory')
         return 'no model found'
     # sklearn module required (not imported explicitly)
-    predict_result.set(model.predict(dataset))
-    # predict_result.set(model.predict(X))
-    return 'ok'
+    result = model.predict(dataset)
+    predict_result.set(result)
+    return str(result)
 
 
 def parse_env():
@@ -89,7 +86,7 @@ def parse_env():
     if port is None:
         os.environ['port'] = '9106'
     if repo is None:
-        os.environ['repo'] = '/tmp/smart'
+        os.environ['repo'] = 'model-repository'
     if prom is None:
         os.environ['prom'] = "prometheus:9090"
     os.environ['prom'] = f"http://{os.environ['prom']}/api/v1/query"
@@ -97,4 +94,5 @@ def parse_env():
 
 if __name__ == '__main__':
     parse_env()
+    mlflow.set_tracking_uri(f"http://{os.environ['repo']}:5000")
     app.run(host=os.environ.get('host'), port=os.environ.get('port'))
