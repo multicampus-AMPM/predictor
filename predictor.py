@@ -2,11 +2,9 @@ from prometheus_client import Gauge
 from flask import Flask
 from prometheus_flask_exporter import PrometheusMetrics
 import mlflow.sklearn
-from mlflow.tracking import MlflowClient
 import os
 import requests
 import pandas as pd
-
 
 def from_prometheus(query):
     """ query to prometheus using API """
@@ -15,14 +13,13 @@ def from_prometheus(query):
         response = requests.get(url=os.environ['prom'], params={'query': query}, timeout=10)
     except Exception as e:
         # raise NewConnectionError if prometheus cannot be connectd
-        # todo loggoer
+        app.logger.error('failed to get from prometheus')
         raise ConnectionError('failed to get from prometheus')
     metrics = response.json()['data']['result']
+    result_dict = {}
     for metric in metrics:
-        print(metric)
-        # todo smart 데이이터 어케 생겼는지 확인 필요
-        # 지지고 볶고
-    return None
+        result_dict[metric['metric']['type']] = metric['value'][1]
+    return pd.DataFrame([result_dict])
 
 
 app = Flask(__name__)
@@ -51,12 +48,14 @@ def main():
     """
 
 
-@app.route('/predict/smart')
+@app.route('/predict')
 @exporter.do_not_track()
 def predict():
     try:
+        # TODO: retrieve query and model name from request body
         # get data from prometheus
-        dataset = from_prometheus('collectd_memory')
+        dataset = from_prometheus('collectd_smart_smart_attribute_pretty or collectd_smart_smart_attribute_current')
+        app.logger.error(dataset)
         if dataset is None:
             raise ValueError('no data from prometheus')
         # get model      
