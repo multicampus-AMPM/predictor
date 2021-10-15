@@ -1,5 +1,5 @@
 from prometheus_client import Gauge
-from flask import Flask
+from flask import Flask, request
 from prometheus_flask_exporter import PrometheusMetrics
 import mlflow.sklearn
 import os
@@ -10,6 +10,7 @@ def from_prometheus(query):
     """ query to prometheus using API """
     try:
         # XXX retry count를 지정해야 할지? > retry handler 사용하면 댐
+        # smart 데이터 두 번 가져와야할 듯
         response = requests.get(url=os.environ['prom'], params={'query': query}, timeout=10)
     except Exception as e:
         # raise NewConnectionError if prometheus cannot be connectd
@@ -51,12 +52,13 @@ def main():
 @app.route('/predict')
 @exporter.do_not_track()
 def predict():
+    app.logger.error(request.args)
     try:
         # TODO: retrieve query and model name from request body
         # get data from prometheus
         dataset = from_prometheus('collectd_smart_smart_attribute_pretty or collectd_smart_smart_attribute_current')
         app.logger.error(dataset)
-        if dataset is None:
+        if dataset is None or dataset.empty:
             raise ValueError('no data from prometheus')
         # get model      
         model = mlflow.sklearn.load_model('models:/smart-model/Production')
