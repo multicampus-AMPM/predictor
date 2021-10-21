@@ -7,6 +7,9 @@ import mlflow.xgboost
 import os
 import requests
 import pandas as pd
+from xgboost import DMatrix
+from sklearn.decomposition import PCA
+from sklearn.preprocessing import StandardScaler
 
 
 class SmartPredictorExporter(object):
@@ -20,8 +23,7 @@ class SmartPredictorExporter(object):
         self.desc_predict_proba = "Predictor_exporter: 'predict_proba'  Type: 'smart_attribute' Dstype: 'api.Gauge'"
         self.labels = ['instance', 'model']
         self.queries = ['collectd_smart_smart_attribute_current', 'collectd_smart_smart_attribute_pretty']
-        # self.models = ['RandomForestClassifier', 'OneClassSVM', 'XGBClassifier']
-        self.models = ['RandomForestClassifier', 'XGBClassifier']
+        self.models = ['RandomForestClassifier', 'XGBClassifier', 'OneClassSVM']
 
     def collect(self):
         result = GaugeMetricFamily(name=self.name_predict, documentation=self.desc_predict, labels=self.labels)
@@ -43,21 +45,33 @@ class SmartPredictorExporter(object):
             for model_name in self.models:
                 try:
                     ref = f'models:/{model_name}/Production'
+                    model = mlflow.xgboost.load_model(ref) if model_name == 'XGBClassifier' else mlflow.sklearn.load_model(ref)
+                    mode_data = self.modify_data(model_name, smart_data)
+                    predict = model.predict(mode_data)
+                    predict_proba = -1
                     if model_name == 'XGBClassifier':
-                        model = mlflow.xgboost.load_model(ref)
+                        predict_proba = predict[0]
+                        predict = 1 if predict_proba > 0.5 else 0
                     else:
-                        model = mlflow.sklearn.load_model(ref)
+                        predict = predict[0]
+                        predict_proba = model.predict_proba(mode_data)[0][1]
+                    result.add_metric([instance, model_name], predict)
+                    if predict_proba != -1:
+                        result_proba.add_metric([instance, model_name], predict_proba)
                 except OSError:
                     self.logger.error(f"No '{model_name}' model found")
-                    continue
-                predict = model.predict(smart_data)
-                predict_proba = model.predict_proba(smart_data)
-                self.logger.error(predict)
-                self.logger.error(predict_proba)
-                result.add_metric([instance, model_name], predict)
-                result_proba.add_metric([instance, model_name], predict_proba)
+                except (ValueError, AttributeError, TypeError) as e:
+                    self.logger.error(f"'{model_name}' : {e}")
         yield result
         yield result_proba
+
+    def modify_data(self, model_name, smart_data):
+        if model_name == 'XGBClassifier':
+            return DMatrix(smart_data)
+        elif model_name == 'OneClassSVM':
+            return PCA(n_components=1).fit_transform(StandardScaler().fit_transform(smart_data))
+        else:
+            return smart_data
 
     def from_prometheus(self):
         metrics = list()
@@ -82,7 +96,8 @@ class SmartPredictorExporter(object):
             attribute_name = metric['metric']['type']
             attribute_name += '-raw' if metric['metric']['__name__'].endswith('pretty') else '-normal'
             # value = [milliseconds, value]
-            smart[attribute_name] = metric['value'][1]
+            self.logger.error(type(metric['value'][1]))
+            smart[attribute_name] = float(metric['value'][1])
         
         return instances_smart
 
