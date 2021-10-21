@@ -5,6 +5,7 @@ click==8.0.1
 cloudpickle==2.0.0
 colorama==0.4.4
 databricks-cli==0.15.0
+dill==0.2.8.2
 docker==5.0.3
 entrypoints==0.3
 Flask==2.0.2
@@ -45,4 +46,5 @@ urllib3==1.26.7
 waitress==2.0.0
 websocket-client==1.2.1
 Werkzeug==2.0.2
+xgboost==1.5.0
 zipp==3.6.0
