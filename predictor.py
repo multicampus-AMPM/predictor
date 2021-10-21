@@ -21,7 +21,7 @@ class SmartPredictorExporter(object):
         self.name_predict_proba = 'ampm_smart_failure_proba'
         self.desc_predict = "Predictor_exporter: 'predict'  Type: 'smart_attribute' Dstype: 'api.Gauge'"
         self.desc_predict_proba = "Predictor_exporter: 'predict_proba'  Type: 'smart_attribute' Dstype: 'api.Gauge'"
-        self.labels = ['instance', 'model']
+        self.labels = ['pc-name', 'model']
         self.queries = ['collectd_smart_smart_attribute_current', 'collectd_smart_smart_attribute_pretty']
         self.models = ['RandomForestClassifier', 'XGBClassifier', 'OneClassSVM']
 
