@@ -12,6 +12,7 @@ import pandas as pd
 from xgboost import DMatrix
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
+import time
 
 
 RF = 'RandomForestClassifier'
@@ -22,12 +23,7 @@ MODELS = {
     XGB: None,
     OCSVM: None   
 }
-FEATURES = ['date',
-            'serial_number',
-            'model',
-            'capacity_bytes',
-            'failure',
-            'read-error-rate-normal',
+FEATURES = ['read-error-rate-normal',
             'read-error-rate-raw',
             'throughput-performance-normal',
             'throughput-performance-raw',
@@ -103,8 +99,6 @@ FEATURES = ['date',
             'ultradma-crc-error-count-raw',
             'multi-zone-error-rate-normal',
             'multi-zone-error-rate-raw',
-            'soft-read-error-rate-normal.1',
-            'soft-read-error-rate-raw.1',
             'data-address-mark-errors-normal',
             'data-address-mark-errors-raw',
             'flying-height-normal',
@@ -296,22 +290,24 @@ def parse_env():
     os.environ['prom'] = f"http://{os.environ['prom']}/api/v1/query"
 
 
-def load_model():
-    # XXX What if
-    # trying to load models faster than registering models in optimizer
+def load_model(max_loop, timesleep):
     mlflow.set_tracking_uri(os.environ['repo'])
-    for model_name in MODELS:
-        ref = f'models:/{model_name}/Production'
+    cnt = 0
+    while cnt < max_loop:
         try:
-            # MODELS[model_name] = mlflow.xgboost.load_model(ref) if model_name == XGB else mlflow.sklearn.load_model(ref)
-            MODELS[model_name] = mlflow.pyfunc.load_model(ref)
+            for model_name in MODELS:
+                ref = f'models:/{model_name}/Production'
+                MODELS[model_name] = mlflow.pyfunc.load_model(ref)
+            break
         except Exception as e:
-            print(f"'{model_name}' : {e}")
+            print(f"'{model_name}' ({cnt+1} tried): {e}")
+            time.sleep(timesleep)
+            cnt += 1
 
 
 if __name__ == '__main__':
     parse_env()
-    load_model()
+    load_model(3, 5)
     # mlflow.set_tracking_uri(os.environ['repo'])
     exporter.registry.register(SmartPredictorExporter(os.environ['prom'], app.logger))
     app.run(host=os.environ.get('host'), port=os.environ.get('port'))
