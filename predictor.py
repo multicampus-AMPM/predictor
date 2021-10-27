@@ -24,7 +24,7 @@ OCSVM = 'OneClassSVM'
 MODELS = {
     RF: None,
     XGB: None,
-    OCSVM: None   
+    OCSVM: None
 }
 FEATURES = ['read-error-rate-normal',
             'read-error-rate-raw',
@@ -192,10 +192,22 @@ class SmartPredictorExporter(object):
                     raise AttributeError('Model Not Loaded')
                 mod_data = self.cast_data(model_name, smart_data)
                 result = model.predict(mod_data)[0]
-                predict = result if model == RF else (1 if result > 0.5 else 0)
-                predict_proba = model.predict_proba(mod_data)[0][1] if model == RF else result
+                predict = 0
+                predict_proba = -1
+                if model_name == OCSVM:
+                    predict = 1 if result == -1 else 0
+                    predict_metric.add_metric([instance_name, 'smart-model', drive_name], predict)
+                elif model_name == XGB:
+                    predict = 1 if result > 0.5 else 0
+                    predict_proba = result
+                else:
+                    # RF
+                    predict = result
+                    # 'RandomForestClassifier' : 'PyFuncModel' object has no attribute 'predict_proba'
+                    predict_proba = model.predict_proba(mod_data)[0][1]
                 predict_metric.add_metric([instance_name, model_name, drive_name], predict)
-                predict_proba_metric.add_metric([instance_name, model_name, drive_name], predict_proba)
+                if predict_proba > -1:
+                    predict_proba_metric.add_metric([instance_name, model_name, drive_name], predict_proba)
             except (ValueError, AttributeError, TypeError, mlflow.exceptions.MlflowException) as e:
                 self.logger.error(f"'{model_name}' : {e}")
 
@@ -228,7 +240,7 @@ class SmartPredictorExporter(object):
             encoder_output = tf.keras.layers.Dense(2)(x)
             encoder = tf.keras.Model(encoder_input, encoder_output)
             encoder.compile(optimizer=tf.keras.optimizers.Adam(0.0005), loss=tf.keras.losses.MeanSquaredError())
-            encoder.fit(smart_data, smart_data, batch_size=1, epochs=10)
+            encoder.fit(smart_data, smart_data, batch_size=1, epochs=1)
             return encoder.predict(smart_data)
         else:
             # random-forest
@@ -320,7 +332,10 @@ def load_model(max_loop, timesleep):
         try:
             for model_name in MODELS:
                 ref = f'models:/{model_name}/Production'
-                MODELS[model_name] = mlflow.pyfunc.load_model(ref)
+                if model_name == RF:
+                    MODELS[model_name] = mlflow.sklearn.load_model(ref)
+                else:
+                    MODELS[model_name] = mlflow.pyfunc.load_model(ref)
             break
         except Exception as e:
             print(f"'{model_name}' ({cnt+1} tried): {e}")
