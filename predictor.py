@@ -12,6 +12,9 @@ import pandas as pd
 from xgboost import DMatrix
 from sklearn.decomposition import PCA
 from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import MinMaxScaler
+import tensorflow as tf
+import numpy as np
 import time
 
 
@@ -154,6 +157,7 @@ class SmartPredictorExporter(object):
         self.desc_predict_proba = "Predictor_exporter: 'predict_proba'  Type: 'smart_attribute' Dstype: 'api.Gauge'"
         self.labels = ['exported_instance', 'model', 'drive']
         self.queries = ['collectd_smart_smart_attribute_current', 'collectd_smart_smart_attribute_pretty']
+        self.scaler = MinMaxScaler()
 
     def collect(self):
         predict_metric = GaugeMetricFamily(name=self.name_predict, documentation=self.desc_predict, labels=self.labels)
@@ -205,12 +209,31 @@ class SmartPredictorExporter(object):
 
     def cast_data(self, model_name, smart_data):
         if model_name == XGB:
-            return smart_data
             # return DMatrix(smart_data)
+            # return smart_data
+            return self.scaler.fit_transform(smart_data)
         elif model_name == OCSVM:
-            return PCA(n_components=1).fit_transform(StandardScaler().fit_transform(smart_data))
+            # return PCA(n_components=1).fit_transform(StandardScaler().fit_transform(smart_data))
+            smart_data = np.array(smart_data)
+            smart_data = self.scaler.fit_transform(smart_data)
+            smart_data = smart_data.reshape(-1, 59, 2, 1)
+            encoder_input = tf.keras.Input(shape=(59, 2, 1))
+            x = tf.keras.layers.Conv2D(64, 3, strides=2, padding='same')(encoder_input)
+            x = tf.keras.layers.BatchNormalization()(x)
+            x = tf.keras.layers.LeakyReLU()(x)
+            x = tf.keras.layers.Conv2D(64, 3, padding='same')(x)
+            x = tf.keras.layers.BatchNormalization()(x)
+            x = tf.keras.layers.LeakyReLU()(x)
+            x = tf.keras.layers.Flatten()(x)
+            encoder_output = tf.keras.layers.Dense(2)(x)
+            encoder = tf.keras.Model(encoder_input, encoder_output)
+            encoder.compile(optimizer=tf.keras.optimizers.Adam(0.0005), loss=tf.keras.losses.MeanSquaredError())
+            encoder.fit(smart_data, smart_data, batch_size=1, epochs=10)
+            return encoder.predict(smart_data)
         else:
-            return smart_data
+            # random-forest
+            # return smart_data
+            return self.scaler.fit_transform(smart_data)
 
     def from_prometheus(self):
         metrics = list()
