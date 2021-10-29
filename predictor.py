@@ -6,6 +6,7 @@ from prometheus_client.core import GaugeMetricFamily
 import mlflow.sklearn
 import mlflow.xgboost
 import mlflow.pyfunc
+from mlflow.tracking import MlflowClient
 import os
 import requests
 import pandas as pd
@@ -21,10 +22,12 @@ import time
 RF = 'RandomForestClassifier'
 XGB = 'XGBClassifier'
 OCSVM = 'OneClassSVM'
+model_name = 'smart-model'
 MODELS = {
     RF: None,
     XGB: None,
     OCSVM: None
+    # model_name: None
 }
 FEATURES = ['read-error-rate-normal',
             'read-error-rate-raw',
@@ -172,7 +175,8 @@ class SmartPredictorExporter(object):
             drives = datasets[instance_name]
             # by drive
             for drive_name in drives:
-                smart_data = pd.DataFrame([self.add_features(drives[drive_name])])
+                new_metrics = self.add_features(drives[drive_name])
+                smart_data = pd.DataFrame([new_metrics])
 
                 if smart_data.empty:
                     self.logger.error(f"failed to convert data from '{instance_name}/{drive_name}' to DataFrame")
@@ -217,17 +221,15 @@ class SmartPredictorExporter(object):
             from_metrics = metrics.get(feature)
             if from_metrics is None:
                 metrics[feature] = 0
-        return metrics
+        new_metrics = dict()
+        for f in FEATURES:
+            new_metrics[f] = metrics[f]
+        return new_metrics
 
     def cast_data(self, model_name, smart_data):
-        if model_name == XGB:
-            # return DMatrix(smart_data)
-            # return smart_data
-            return self.scaler.fit_transform(smart_data)
-        elif model_name == OCSVM:
-            # return PCA(n_components=1).fit_transform(StandardScaler().fit_transform(smart_data))
+        if model_name == OCSVM:
+            # smart_data = self.scaler.fit_transform(smart_data)
             smart_data = np.array(smart_data)
-            smart_data = self.scaler.fit_transform(smart_data)
             smart_data = smart_data.reshape(-1, 59, 2, 1)
             encoder_input = tf.keras.Input(shape=(59, 2, 1))
             x = tf.keras.layers.Conv2D(64, 3, strides=2, padding='same')(encoder_input)
@@ -237,15 +239,15 @@ class SmartPredictorExporter(object):
             x = tf.keras.layers.BatchNormalization()(x)
             x = tf.keras.layers.LeakyReLU()(x)
             x = tf.keras.layers.Flatten()(x)
-            encoder_output = tf.keras.layers.Dense(2)(x)
-            encoder = tf.keras.Model(encoder_input, encoder_output)
-            encoder.compile(optimizer=tf.keras.optimizers.Adam(0.0005), loss=tf.keras.losses.MeanSquaredError())
-            encoder.fit(smart_data, smart_data, batch_size=1, epochs=1)
-            return encoder.predict(smart_data)
+            encoder_output = tf.keras.layers.Dense(1)(x)
+            encoder_test = tf.keras.Model(encoder_input, encoder_output)
+            encoder_test.compile(optimizer=tf.keras.optimizers.Adam(0.0005), loss=tf.keras.losses.MeanSquaredError())
+            encoder_test.fit(smart_data, np.array([0]).astype(float), batch_size=1, epochs=1)
+            return encoder_test.predict(smart_data)
         else:
-            # random-forest
-            # return smart_data
-            return self.scaler.fit_transform(smart_data)
+            # RF, XGB
+            return smart_data
+            # return self.scaler.fit_transform(smart_data)
 
     def from_prometheus(self):
         metrics = list()
@@ -319,14 +321,16 @@ def parse_env():
     if port is None:
         os.environ['port'] = '9106'
     if repo is None:
-        os.environ['repo'] = 'http://model-repository:5000'
+        os.environ['repo'] = 'model-repository'
     if prom is None:
         os.environ['prom'] = "prometheus:9090"
     os.environ['prom'] = f"http://{os.environ['prom']}/api/v1/query"
+    os.environ['tracking'] = f'http://{os.environ["repo"]}:5000'
+    os.environ['ftp'] = f'ftp://mlflow:mlflow@{os.environ["repo"]}/mlflow/artifacts/'
 
 
 def load_model(max_loop, timesleep):
-    mlflow.set_tracking_uri(os.environ['repo'])
+    mlflow.set_tracking_uri(os.environ['tracking'])
     cnt = 0
     while cnt < max_loop:
         try:
@@ -343,8 +347,32 @@ def load_model(max_loop, timesleep):
             cnt += 1
 
 
+def register_model_by_recall(timesleep):
+    # 모델 레포지토리가 runs 등록할 때까지만 기다리자
+    time.sleep(timesleep)
+    mlflow.set_tracking_uri(os.environ['tracking'])
+    # run = mlflow.search_runs(["0"], filter_string="metrics.recall > 0.8", max_results=1)
+    run = mlflow.search_runs(["0"], order_by=["metrics.recall DESC"], max_results=1)
+    client = MlflowClient()
+    model_name = 'smart-model'
+    if not run.empty:
+        client.create_registered_model(model_name)
+        client.create_model_version(
+            name=model_name,
+            source=run['artifact_uri'].iloc[0],
+            run_id=run['run_id'].iloc[0],
+            description=f"best model for smart : {run['tags.estimator_name'].iloc[0]}"
+        )
+        client.transition_model_version_stage(
+            name=model_name,
+            version=1,
+            stage="Production"
+        )
+
+
 if __name__ == '__main__':
     parse_env()
+    # register_model_by_recall(5)
     load_model(3, 5)
     # mlflow.set_tracking_uri(os.environ['repo'])
     exporter.registry.register(SmartPredictorExporter(os.environ['prom'], app.logger))
