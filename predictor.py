@@ -22,12 +22,10 @@ import time
 RF = 'RandomForestClassifier'
 XGB = 'XGBClassifier'
 OCSVM = 'OneClassSVM'
-model_name = 'smart-model'
 MODELS = {
     RF: None,
     XGB: None,
     OCSVM: None
-    # model_name: None
 }
 FEATURES = ['read-error-rate-normal',
             'read-error-rate-raw',
@@ -149,11 +147,11 @@ FEATURES = ['read-error-rate-normal',
             'free-fall-protection-raw']
 
 
-class SmartPredictorExporter(object):
+class PredictorExporter(object):
     
-    def __init__(self, prometheus_url, logger):
-        self.url = prometheus_url
+    def __init__(self, logger):
         self.logger = logger
+        self.url = os.environ['prom']
         self.name_predict = 'ampm_smart_failure'
         self.name_predict_proba = 'ampm_smart_failure_proba'
         self.desc_predict = "Predictor_exporter: 'predict'  Type: 'smart_attribute' Dstype: 'api.Gauge'"
@@ -190,28 +188,37 @@ class SmartPredictorExporter(object):
     
     def add_metrics(self, predict_metric, predict_proba_metric, instance_name, drive_name, smart_data):
         for model_name in MODELS:
-            model = MODELS[model_name]
             try:
-                if model is None:
+                if MODELS[model_name] is None:
                     raise AttributeError('Model Not Loaded')
+                model = MODELS[model_name][0]
+                best = MODELS[model_name][1]
                 mod_data = self.cast_data(model_name, smart_data)
-                result = model.predict(mod_data)[0]
-                predict = 0
-                predict_proba = -1
-                if model_name == OCSVM:
-                    predict = 1 if result == -1 else 0
-                    predict_metric.add_metric([instance_name, 'smart-model', drive_name], predict)
-                elif model_name == XGB:
-                    predict = 1 if result > 0.5 else 0
-                    predict_proba = result
-                else:
-                    # RF
-                    predict = result
+
+                if model_name == RF:
+                    predict = model.predict(mod_data)[0]
                     # 'RandomForestClassifier' : 'PyFuncModel' object has no attribute 'predict_proba'
                     predict_proba = model.predict_proba(mod_data)[0][1]
-                predict_metric.add_metric([instance_name, model_name, drive_name], predict)
-                if predict_proba > -1:
+                    predict_metric.add_metric([instance_name, model_name, drive_name], predict)
                     predict_proba_metric.add_metric([instance_name, model_name, drive_name], predict_proba)
+                    if best == '1':
+                        predict_metric.add_metric([instance_name, 'BestEstimator', drive_name], predict)
+                        predict_proba_metric.add_metric([instance_name, 'BestEstimator', drive_name], predict_proba)
+                elif model_name == XGB:
+                    predict_proba = model.predict(mod_data)[0]
+                    predict = 1 if predict_proba > 0.5 else 0
+                    predict_metric.add_metric([instance_name, model_name, drive_name], predict)
+                    predict_proba_metric.add_metric([instance_name, model_name, drive_name], predict_proba)
+                    if best == '1':
+                        predict_metric.add_metric([instance_name, 'BestEstimator', drive_name], predict)
+                        predict_proba_metric.add_metric([instance_name, 'BestEstimator', drive_name], predict_proba)
+                else:
+                    # OCSVM
+                    predict = model.predict(mod_data)[0]
+                    predict = 1 if predict == -1 else 0
+                    predict_metric.add_metric([instance_name, model_name, drive_name], predict)
+                    if best == '1':
+                        predict_metric.add_metric([instance_name, 'BestEstimator', drive_name], predict)
             except (ValueError, AttributeError, TypeError, mlflow.exceptions.MlflowException) as e:
                 self.logger.error(f"'{model_name}' : {e}")
 
@@ -228,7 +235,6 @@ class SmartPredictorExporter(object):
 
     def cast_data(self, model_name, smart_data):
         if model_name == OCSVM:
-            # smart_data = self.scaler.fit_transform(smart_data)
             smart_data = np.array(smart_data)
             smart_data = smart_data.reshape(-1, 59, 2, 1)
             encoder_input = tf.keras.Input(shape=(59, 2, 1))
@@ -247,7 +253,6 @@ class SmartPredictorExporter(object):
         else:
             # RF, XGB
             return smart_data
-            # return self.scaler.fit_transform(smart_data)
 
     def from_prometheus(self):
         metrics = list()
@@ -274,12 +279,13 @@ class SmartPredictorExporter(object):
             if drive is None:
                 smart[drive_name] = dict()
                 drive = smart.get(drive_name)
-
+                
+            # drive['index'] = 0 if metric['metric'].get('index') is None else metric['metric']['index']
             attribute_name = metric['metric']['type']
             if not attribute_name.endswith('raw') and not attribute_name.endswith('normal'):
                 attribute_name += '-raw' if metric['metric']['__name__'].endswith('pretty') else '-normal'
-            # value = [milliseconds, value]
-            drive[attribute_name] = float(metric['value'][1])    
+            # value is in the foramt of [milliseconds, value]
+            drive[attribute_name] = float(metric['value'][1])   
         return instances_smart
 
 
@@ -314,6 +320,7 @@ def parse_env():
     port = os.environ.get('port')
     repo = os.environ.get('repo')
     prom = os.environ.get('prom')
+    model = os.environ.get('model')
 
     # TODO regex validation
     if host is None:
@@ -324,6 +331,7 @@ def parse_env():
         os.environ['repo'] = 'model-repository'
     if prom is None:
         os.environ['prom'] = "prometheus:9090"
+    
     os.environ['prom'] = f"http://{os.environ['prom']}/api/v1/query"
     os.environ['tracking'] = f'http://{os.environ["repo"]}:5000'
     os.environ['ftp'] = f'ftp://mlflow:mlflow@{os.environ["repo"]}/mlflow/artifacts/'
@@ -331,15 +339,16 @@ def parse_env():
 
 def load_model(max_loop, timesleep):
     mlflow.set_tracking_uri(os.environ['tracking'])
+    client = MlflowClient()
     cnt = 0
     while cnt < max_loop:
         try:
             for model_name in MODELS:
                 ref = f'models:/{model_name}/Production'
-                if model_name == RF:
-                    MODELS[model_name] = mlflow.sklearn.load_model(ref)
-                else:
-                    MODELS[model_name] = mlflow.pyfunc.load_model(ref)
+                model = mlflow.sklearn.load_model(ref) if model_name == RF else mlflow.pyfunc.load_model(ref)
+                if model:
+                    tags = client.get_registered_model(model_name).tags
+                    MODELS[model_name] = (model, tags['best'])
             break
         except Exception as e:
             print(f"'{model_name}' ({cnt+1} tried): {e}")
@@ -347,33 +356,8 @@ def load_model(max_loop, timesleep):
             cnt += 1
 
 
-def register_model_by_recall(timesleep):
-    # 모델 레포지토리가 runs 등록할 때까지만 기다리자
-    time.sleep(timesleep)
-    mlflow.set_tracking_uri(os.environ['tracking'])
-    # run = mlflow.search_runs(["0"], filter_string="metrics.recall > 0.8", max_results=1)
-    run = mlflow.search_runs(["0"], order_by=["metrics.recall DESC"], max_results=1)
-    client = MlflowClient()
-    model_name = 'smart-model'
-    if not run.empty:
-        client.create_registered_model(model_name)
-        client.create_model_version(
-            name=model_name,
-            source=run['artifact_uri'].iloc[0],
-            run_id=run['run_id'].iloc[0],
-            description=f"best model for smart : {run['tags.estimator_name'].iloc[0]}"
-        )
-        client.transition_model_version_stage(
-            name=model_name,
-            version=1,
-            stage="Production"
-        )
-
-
 if __name__ == '__main__':
     parse_env()
-    # register_model_by_recall(5)
     load_model(3, 5)
-    # mlflow.set_tracking_uri(os.environ['repo'])
-    exporter.registry.register(SmartPredictorExporter(os.environ['prom'], app.logger))
+    exporter.registry.register(PredictorExporter(app.logger))
     app.run(host=os.environ.get('host'), port=os.environ.get('port'))
